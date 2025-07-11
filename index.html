@@ -1,19 +1,18 @@
 <!DOCTYPE html>
-
 <html lang="th">
 <head>
   <link rel="manifest" href="manifest.json">
-<script>
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('service-worker.js').then(reg => {
-        console.log('✅ Service Worker ลงทะเบียนแล้ว:', reg.scope);
-      }).catch(err => {
-        console.error('❌ Service Worker ล้มเหลว:', err);
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('service-worker.js').then(reg => {
+          console.log('✅ Service Worker ลงทะเบียนแล้ว:', reg.scope);
+        }).catch(err => {
+          console.error('❌ Service Worker ล้มเหลว:', err);
+        });
       });
-    });
-  }
-</script>
+    }
+  </script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>คำนวณ Stroke + วัตถุดิบ</title>
@@ -110,20 +109,78 @@
     <div id="autoFields" style="font-size: 14px; color: #444; margin-top: 10px;"></div>
 
     <button id="calculateBtn">🧲 คำนวณ</button>
-    <!-- ปุ่มพิมพ์ใหม่ เพิ่มตรงนี้ -->
     <button id="printBtn" style="display:none;">🖨️ พิมพ์ผลลัพธ์</button>
 
     <div id="result"></div>
   </div>
 
   <script>
+    // IndexedDB Setup
+    const dbName = 'strokeCalcDB';
+    const storeName = 'products';
+    let db;
+
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open(dbName, 1);
+        request.onerror = () => reject('ไม่สามารถเปิดฐานข้อมูลได้');
+        request.onsuccess = () => {
+          db = request.result;
+          resolve(db);
+        };
+        request.onupgradeneeded = (e) => {
+          db = e.target.result;
+          if (!db.objectStoreNames.contains(storeName)) {
+            db.createObjectStore(storeName, { keyPath: 'code' }); // ใช้ code เป็น key
+          }
+        };
+      });
+    }
+
+    function getAllProducts() {
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction(storeName, 'readonly');
+        const store = transaction.objectStore(storeName);
+        const request = store.getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject('อ่านข้อมูลล้มเหลว');
+      });
+    }
+
+    function saveProductIndexedDB(product) {
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction(storeName, 'readwrite');
+        const store = transaction.objectStore(storeName);
+        const request = store.put(product);
+        request.onsuccess = () => resolve(true);
+        request.onerror = () => reject('บันทึกข้อมูลล้มเหลว');
+      });
+    }
+
+    function deleteProductIndexedDB(code) {
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction(storeName, 'readwrite');
+        const store = transaction.objectStore(storeName);
+        const request = store.delete(code);
+        request.onsuccess = () => resolve(true);
+        request.onerror = () => reject('ลบข้อมูลล้มเหลว');
+      });
+    }
+
+    // ตัวแปรเก็บรายการสินค้าในหน่วยความจำ
+    let products = [];
+
+    async function loadProducts() {
+      products = await getAllProducts();
+      renderProductList();
+      loadProductOptions();
+    }
+
     function showSection(sectionId) {
       document.getElementById('database').classList.add('hidden');
       document.getElementById('calculator').classList.add('hidden');
       document.getElementById(sectionId).classList.remove('hidden');
     }
-
-    const products = JSON.parse(localStorage.getItem('products') || '[]');
 
     function renderProductList() {
       const table = document.getElementById('productTable');
@@ -152,8 +209,8 @@
               <td>${p.spm}</td>
               <td>${p.yield}</td>
               <td>
-                <button onclick="editProduct(${i})">✏️</button>
-                <button onclick="deleteProduct(${i})">🗑️</button>
+                <button onclick="editProduct('${p.code}')">✏️</button>
+                <button onclick="deleteProduct('${p.code}')">🗑️</button>
               </td>
             </tr>
           `;
@@ -161,7 +218,7 @@
       });
     }
 
-    function saveProduct() {
+    async function saveProduct() {
       const code = document.getElementById('newCode').value.trim();
       const name = document.getElementById('newName').value.trim();
       if (!code || !name) return alert('กรอกข้อมูลให้ครบ');
@@ -178,19 +235,28 @@
         thickness: parseFloat(document.getElementById('newThickness').value) || 0,
         height: parseFloat(document.getElementById('newHeight').value) || 0,
       };
-      const idx = document.getElementById('editIndex').value;
-      if (idx !== '') products[idx] = data;
-      else products.push(data);
-      localStorage.setItem('products', JSON.stringify(products));
-      document.getElementById('editIndex').value = '';
-      document.querySelectorAll('input').forEach(el => el.value = '');
-      renderProductList();
-      loadProductOptions();
+
+      try {
+        await saveProductIndexedDB(data);
+        alert('บันทึกสินค้าเรียบร้อย');
+        clearForm();
+        await loadProducts();
+        showSection('database');
+      } catch (error) {
+        alert(error);
+      }
     }
 
-    function editProduct(i) {
-      const p = products[i];
-      document.getElementById('editIndex').value = i;
+    function clearForm() {
+      document.getElementById('editIndex').value = '';
+      document.querySelectorAll('#database input').forEach(el => el.value = '');
+    }
+
+    // แก้ไขสินค้าโดยค้นหาจาก code
+    function editProduct(code) {
+      const p = products.find(item => item.code === code);
+      if (!p) return alert('ไม่พบสินค้า');
+      document.getElementById('editIndex').value = code;
       document.getElementById('newCode').value = p.code || '';
       document.getElementById('newName').value = p.name;
       document.getElementById('newSteelGrade').value = p.steelGrade || '';
@@ -205,12 +271,15 @@
       showSection('database');
     }
 
-    function deleteProduct(i) {
-      if (!confirm('ลบใช่ไหม')) return;
-      products.splice(i, 1);
-      localStorage.setItem('products', JSON.stringify(products));
-      renderProductList();
-      loadProductOptions();
+    async function deleteProduct(code) {
+      if (!confirm('ลบใช่ไหม?')) return;
+      try {
+        await deleteProductIndexedDB(code);
+        alert('ลบสินค้าเรียบร้อย');
+        await loadProducts();
+      } catch (error) {
+        alert(error);
+      }
     }
 
     function loadProductOptions() {
@@ -218,16 +287,16 @@
       select.innerHTML = '<option value="">-- เลือกสินค้า --</option>';
       products.forEach((p, i) => {
         const opt = document.createElement('option');
-        opt.value = i;
+        opt.value = p.code; // ใช้ code เป็นค่า
         opt.textContent = `${p.code || ''} - ${p.name}`;
         select.appendChild(opt);
       });
     }
 
     function searchProdCode() {
-      const code = document.getElementById('searchCodeInput').value.toLowerCase();
+      const codeInput = document.getElementById('searchCodeInput').value.toLowerCase();
       const select = document.getElementById('productSelect');
-      const found = [...select.options].find(opt => opt.textContent.toLowerCase().includes(code));
+      const found = [...select.options].find(opt => opt.textContent.toLowerCase().includes(codeInput));
       if (found) {
         select.value = found.value;
         select.dispatchEvent(new Event('change'));
@@ -235,9 +304,13 @@
     }
 
     document.getElementById('productSelect').addEventListener('change', function () {
-      const i = this.value;
-      if (!products[i]) return;
-      const p = products[i];
+      const code = this.value;
+      if (!code) {
+        document.getElementById('autoFields').innerHTML = '';
+        return;
+      }
+      const p = products.find(item => item.code === code);
+      if (!p) return;
       document.getElementById('autoFields').innerHTML = `
         น้ำหนัก/Stroke: ${p.weight}g<br>
         ชิ้น/Stroke: ${p.pcs}<br>
@@ -258,67 +331,66 @@
       }
     });
 
-    // ฟังก์ชันพิมพ์ข้อมูลผลลัพธ์
     function printResult() {
-  const resultDiv = document.getElementById('result');
-  const printWindow = window.open('', '', 'width=800,height=600');
-  printWindow.document.write(`
-    <html>
-      <head>
-        <title>พรีวิวก่อนพิมพ์</title>
-        <style>
-          @page { size: A5 landscape; margin: 10mm; }
-          body {
-            font-family: sans-serif;
-            font-size: 16px;
-            padding: 20px;
-            color: #2a7ae2;
-          }
-          h2 {
-            text-align: center;
-            margin-bottom: 20px;
-          }
-          p {
-            margin: 10px 0;
-          }
-          .preview-container {
-            border: 1px solid #ccc;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-          }
-          .print-btn {
-            display: block;
-            margin: auto;
-            padding: 10px 20px;
-            background: #2a7ae2;
-            color: white;
-            border: none;
-            font-size: 16px;
-            cursor: pointer;
-            border-radius: 5px;
-          }
-        </style>
-      </head>
-      <body>
-        <h2>คำนวณ Strokeและวัตถุดิบที่ใช้ผลิต</h2>
-        <div class="preview-container">
-          ${resultDiv.innerHTML}
-        </div>
-        <button class="print-btn" onclick="window.print()">🖨️ พิมพ์</button>
-      </body>
-    </html>
-  `);
-  printWindow.document.close();
-}
+      const resultDiv = document.getElementById('result');
+      const printWindow = window.open('', '', 'width=800,height=600');
+      printWindow.document.write(`
+        <html>
+          <head>
+            <title>พรีวิวก่อนพิมพ์</title>
+            <style>
+              @page { size: A5 landscape; margin: 10mm; }
+              body {
+                font-family: sans-serif;
+                font-size: 16px;
+                padding: 20px;
+                color: #2a7ae2;
+              }
+              h2 {
+                text-align: center;
+                margin-bottom: 20px;
+              }
+              p {
+                margin: 10px 0;
+              }
+              .preview-container {
+                border: 1px solid #ccc;
+                padding: 20px;
+                border-radius: 10px;
+                margin-bottom: 20px;
+              }
+              .print-btn {
+                display: block;
+                margin: auto;
+                padding: 10px 20px;
+                background: #2a7ae2;
+                color: white;
+                border: none;
+                font-size: 16px;
+                cursor: pointer;
+                border-radius: 5px;
+              }
+            </style>
+          </head>
+          <body>
+            <h2>คำนวณ Strokeและวัตถุดิบที่ใช้ผลิต</h2>
+            <div class="preview-container">
+              ${resultDiv.innerHTML}
+            </div>
+            <button class="print-btn" onclick="window.print()">🖨️ พิมพ์</button>
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+    }
 
     document.getElementById('calculateBtn').addEventListener('click', () => {
-      const idx = document.getElementById('productSelect').value;
-      if (!products[idx]) {
+      const code = document.getElementById('productSelect').value;
+      const p = products.find(item => item.code === code);
+      if (!p) {
         alert('กรุณาเลือกสินค้า');
         return;
       }
-      const p = products[idx];
       let orderQty = parseFloat(document.getElementById('orderQty').value);
       let wipQty = parseFloat(document.getElementById('wipQty').value) || 0;
       const unit = document.getElementById('unitSelect').value;
@@ -336,52 +408,55 @@
       let remainQty = orderQty - wipQty;
       if (remainQty < 0) remainQty = 0;
 
-      let remainPcs;
-      if (unit === 'KGs') {
-        if (p.rmw === 0) {
-          alert('ข้อมูลน้ำหนักต่อชิ้น (Rmw) ต้องไม่เป็น 0 สำหรับหน่วย KGs');
-          return;
-        }
-        remainPcs = (remainQty * 1000) / p.weight;
-      } else if (unit === 'Pcs') {
-        remainPcs = remainQty;
-      } else if (unit === 'SET') {
-        remainPcs = (remainQty * pcsPerSet) / p.pcs;
-      } else {
-        remainPcs = 0;
+      let pcsNeeded, weightNeeded;
+
+      switch (unit) {
+        case 'KGs':
+          // น้ำหนักทั้งหมด (kg) ต้องแปลงเป็น g ก่อน
+          pcsNeeded = (orderQty * 1000) / p.rmw;
+          break;
+        case 'Pcs':
+          pcsNeeded = orderQty;
+          break;
+        case 'SET':
+          pcsNeeded = orderQty * pcsPerSet;
+          break;
+        default:
+          pcsNeeded = orderQty;
       }
 
-      let strokeCount = 0;
-      if (p.pcs > 0) strokeCount = remainPcs;
+      pcsNeeded -= wipQty;
+      if (pcsNeeded < 0) pcsNeeded = 0;
 
-      let rawMaterialKg = (strokeCount * p.rmw / 1000) * 1.02;
+      weightNeeded = pcsNeeded * p.rmw / 1000; // น้ำหนักเป็น กิโลกรัม
 
-      let strokePerHour = p.spm * 0.7 * 60;
+      const strokesNeeded = pcsNeeded / p.pcs;
+      const timeMinutes = strokesNeeded / p.spm;
+      const timeSeconds = timeMinutes * 60;
 
-      let runningTimeHour = 0;
-      if (strokePerHour > 0) runningTimeHour = strokeCount / strokePerHour;
-
-      const hours = Math.floor(runningTimeHour);
-      const minutes = Math.floor((runningTimeHour - hours) * 60);
-
-      const resultDiv = document.getElementById('result');
-      resultDiv.innerHTML = `
-        <p>จำนวน Order ที่ต้องผลิต (หลังหัก WIP): <strong>${remainQty.toFixed(2)} ${unit}</strong></p>
-        <p>จำนวน Stroke ที่ต้องปั๊ม: <strong>${strokeCount.toFixed(2)} Stroke</strong></p>
-        <p>วัตถุดิบที่ใช้: <strong>${rawMaterialKg.toFixed(3)} กิโลกรัม</strong></p>
-        <p>เวลาผลิต: <strong>${hours} ชั่วโมง ${minutes} นาที</strong></p>
+      const resultHTML = `
+        <p>สินค้า: <b>${p.name}</b> (${p.code})</p>
+        <p>Order: ${orderQty} ${unit}</p>
+        <p>WIP: ${wipQty} ${unit}</p>
+        <p>จำนวนที่ต้องผลิต: ${pcsNeeded.toFixed(2)} ชิ้น</p>
+        <p>น้ำหนักที่ต้องใช้: ${weightNeeded.toFixed(3)} กิโลกรัม</p>
+        <p>จำนวน Stroke ที่ต้องใช้: ${strokesNeeded.toFixed(2)}</p>
+        <p>เวลาที่ต้องใช้ (นาที): ${timeMinutes.toFixed(2)} นาที</p>
+        <p>เวลาที่ต้องใช้ (วินาที): ${timeSeconds.toFixed(0)} วินาที</p>
       `;
 
-      // แสดงปุ่มพิมพ์หลังคำนวณเสร็จ
+      document.getElementById('result').innerHTML = resultHTML;
       document.getElementById('printBtn').style.display = 'inline-block';
     });
 
-    // กดปุ่มพิมพ์ ให้เรียกฟังก์ชัน printResult
     document.getElementById('printBtn').addEventListener('click', printResult);
 
-    renderProductList();
-    loadProductOptions();
-  </script>
+    // เริ่มต้นเปิด DB และโหลดข้อมูล
+    openDB().then(() => loadProducts());
 
+    // เริ่มที่หน้า database
+    showSection('database');
+  </script>
 </body>
 </html>
+
